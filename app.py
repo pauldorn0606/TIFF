@@ -4,6 +4,8 @@ from datetime import date, timedelta
 import sqlite3
 import altair as alt
 import pandas as pd
+import psycopg2
+import psycopg2.extras
 import streamlit as st
 
 # 加上這行，把目前程式儲存檔案的「真實路徑」印在網頁畫面上
@@ -16,8 +18,15 @@ DB_NAME = "health_app.db"
 # 1. 資料庫連線與初始化 (Database Helpers)
 # =============================================================================
 def get_db_connection():
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    # 從 Streamlit Cloud 後台安全的讀取雲端資料庫連線網址
+    DATABASE_URL = st.secrets["DATABASE_URL"]
+    
+    # 建立雲端連線
+    conn = psycopg2.connect(DATABASE_URL)
+    
+    # 🌟 這行最關鍵！它可以讓 PostgreSQL 的讀取結果
+    # 像你原本的 sqlite3.Row 一樣，支援用 row['欄位名'] 的方式拿資料
+    conn.cursor_factory = psycopg2.extras.DictCursor
     return conn
 
 
