@@ -5,28 +5,6 @@ import sqlite3
 import altair as alt
 import pandas as pd
 import streamlit as st
-from st_files_connection import FilesConnection
-import pandas as pd
-
-# 填入你建立的 Google 試算表「共用網址」（需設定為「知道連結的人皆可編輯」）
-GSHEET_URL = "https://google.com"
-
-def get_cloud_data():
-    """取代原本的讀取資料庫，直接從雲端試算表讀取"""
-    conn = st.connection("gsheets", type=FilesConnection)
-    try:
-        # ttl="0" 代表不快取，每次都抓最新資料
-        df = conn.read(spreadsheet=GSHEET_URL, ttl="0")
-        return df
-    except Exception:
-        # 如果試算表是空的，就回傳一個空的 DataFrame
-        return pd.DataFrame()
-
-def save_cloud_data(new_df):
-    """取代原本的 INSERT / UPDATE，直接覆蓋或附加到雲端試算表"""
-    conn = st.connection("gsheets", type=FilesConnection)
-    # 這裡可以將新資料透過原本 st.connection 的機制寫回
-    # (詳細權限需在 Streamlit Cloud 的 Secrets 設定 Google 憑證)
 
 # 加上這行，把目前程式儲存檔案的「真實路徑」印在網頁畫面上
 st.warning(f"目前程式認定的資料夾路徑是：{os.getcwd()}")
