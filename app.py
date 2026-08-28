@@ -15,10 +15,20 @@ DB_NAME = "health_app.db"
 # =============================================================================
 # 1. 資料庫連線與初始化 (Database Helpers)
 # =============================================================================
+# 設定持久化資料庫儲存目錄（優先使用伺服器掛載目錄或使用者家目錄）
+DATA_DIR = os.path.join(os.path.expanduser("~"), ".health_app_data")
+os.makedirs(DATA_DIR, exist_ok=True)
+DB_NAME = os.path.join(DATA_DIR, "health_app.db")
+
+# 顯示目前認定的真實 DB 檔案路徑
+st.warning(f"目前資料庫儲存路徑是：{DB_NAME}")
+
+
 def get_db_connection():
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
     return conn
+
 
 def init_db():
     """初始化 SQLite 資料庫表格"""
@@ -109,7 +119,6 @@ def init_db():
 
     conn.commit()
     conn.close()
-
 
 # =============================================================================
 # 2. 食物資料庫 & 紀錄操作 CRUD 函式
