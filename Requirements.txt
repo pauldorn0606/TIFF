@@ -1,4 +1,2 @@
 streamlit
 pandas
-st-files-connection=0.0.1
-gspread
