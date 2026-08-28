@@ -4,7 +4,8 @@ from datetime import date, timedelta
 import sqlite3
 import altair as alt
 import pandas as pd
-import streamlit as stfrom st_files_connection import FilesConnection
+import streamlit as st
+from st_files_connection import FilesConnection
 import pandas as pd
 
 # 1. 建立與 Google Sheets 的連線
