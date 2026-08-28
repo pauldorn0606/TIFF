@@ -1,3 +1,7 @@
+import os
+print("=== 目前程式認定的儲存資料夾是 ===")
+print(os.getcwd())  # 這會印出目前的工作目錄
+print("=================================")
 import calendar
 from datetime import date, timedelta
 import sqlite3
