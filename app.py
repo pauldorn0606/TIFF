@@ -1,3 +1,4 @@
+import io
 import os
 import calendar
 from datetime import date, timedelta
@@ -6,32 +7,94 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-# 加上這行，把目前程式儲存檔案的「真實路徑」印在網頁畫面上
-st.warning(f"目前程式認定的資料夾路徑是：{os.getcwd()}")
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 DB_NAME = "health_app.db"
+
+# =============================================================================
+# 0. Google Drive 同步 Helper 函式
+# =============================================================================
+@st.cache_resource
+def get_drive_service():
+    """初始化 Google Drive API 服務"""
+    try:
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        creds = service_account.Credentials.from_service_account_info(
+            creds_dict,
+            scopes=["https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/drive"]
+        )
+        return build("drive", "v3", credentials=creds)
+    except Exception as e:
+        st.error(f"Google Drive 認證失敗：{e}")
+        return None
+
+def download_db_from_drive():
+    """從 Google Drive 下載最新的 SQLite 資料庫檔案"""
+    service = get_drive_service()
+    folder_id = st.secrets.get("FOLDER_ID")
+    if not service or not folder_id:
+        return
+
+    try:
+        # 尋找資料夾內的 health_app.db
+        query = f"'{folder_id}' in parents and name = '{DB_NAME}' and trashed = false"
+        results = service.files().list(q=query, fields="files(id, name)").execute()
+        items = results.get("files", [])
+
+        if items:
+            file_id = items[0]["id"]
+            request = service.files().get_media(fileId=file_id)
+            with open(DB_NAME, "wb") as f:
+                downloader = MediaIoBaseDownload(f, request)
+                done = False
+                while not done:
+                    _, done = downloader.next_chunk()
+    except Exception as e:
+        st.warning(f"從 Google Drive 下載資料庫時發生錯誤（若為首次建立可忽略）：{e}")
+
+def upload_db_to_drive():
+    """將本地 SQLite 資料庫檔案上傳同步至 Google Drive"""
+    service = get_drive_service()
+    folder_id = st.secrets.get("FOLDER_ID")
+    if not service or not folder_id or not os.path.exists(DB_NAME):
+        return
+
+    try:
+        # 檢查雲端是否已有舊檔
+        query = f"'{folder_id}' in parents and name = '{DB_NAME}' and trashed = false"
+        results = service.files().list(q=query, fields="files(id, name)").execute()
+        items = results.get("files", [])
+
+        media = MediaFileUpload(DB_NAME, mimetype="application/x-sqlite3", resumable=True)
+
+        if items:
+            # 覆蓋舊檔案
+            file_id = items[0]["id"]
+            service.files().update(fileId=file_id, media_body=media).execute()
+        else:
+            # 新增檔案
+            file_metadata = {"name": DB_NAME, "parents": [folder_id]}
+            service.files().create(body=file_metadata, media_body=media, fields="id").execute()
+    except Exception as e:
+        st.error(f"備份至 Google Drive 失敗：{e}")
 
 
 # =============================================================================
 # 1. 資料庫連線與初始化 (Database Helpers)
 # =============================================================================
-# 設定持久化資料庫儲存目錄（優先使用伺服器掛載目錄或使用者家目錄）
-DATA_DIR = os.path.join(os.path.expanduser("~"), ".health_app_data")
-os.makedirs(DATA_DIR, exist_ok=True)
-DB_NAME = os.path.join(DATA_DIR, "health_app.db")
-
-# 顯示目前認定的真實 DB 檔案路徑
-st.warning(f"目前資料庫儲存路徑是：{DB_NAME}")
-
-
 def get_db_connection():
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
     return conn
 
-
 def init_db():
-    """初始化 SQLite 資料庫表格"""
+    """初始化 SQLite 資料庫表格（首次載入時先同步 Drive）"""
+    if "db_initialized" not in st.session_state:
+        download_db_from_drive()
+        st.session_state["db_initialized"] = True
+
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -120,6 +183,216 @@ def init_db():
     conn.commit()
     conn.close()
 
+
+# =============================================================================
+# 2. 食物資料庫 & 紀錄操作 CRUD 函式 (異動後均執行 upload_db_to_drive)
+# =============================================================================
+def get_all_foods():
+    conn = get_db_connection()
+    df = pd.read_sql_query("SELECT * FROM foods ORDER BY name ASC", conn)
+    conn.close()
+    return df
+
+
+def add_food_item(name, calories, protein, carbs, fat, unit="份"):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            INSERT INTO foods (name, calories, protein, carbs, fat, serving_unit)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """,
+            (name, calories, protein, carbs, fat, unit),
+        )
+        conn.commit()
+        upload_db_to_drive()
+        return True, "成功新增食物至資料庫！"
+    except sqlite3.IntegrityError:
+        return False, "新增失敗：該食物名稱已存在。"
+    finally:
+        conn.close()
+
+
+def update_food_item(food_id, name, calories, protein, carbs, fat, unit="份"):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            UPDATE foods 
+            SET name=?, calories=?, protein=?, carbs=?, fat=?, serving_unit=? 
+            WHERE id=?
+        """,
+            (name, calories, protein, carbs, fat, unit, food_id),
+        )
+        conn.commit()
+        upload_db_to_drive()
+        return True, "成功更新食物資料！"
+    except sqlite3.IntegrityError:
+        return False, "更新失敗：該食物名稱與其他既有品項重複。"
+    finally:
+        conn.close()
+
+
+def delete_food_item(food_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM foods WHERE id = ?", (food_id,))
+    conn.commit()
+    conn.close()
+    upload_db_to_drive()
+
+
+def add_log(date_str, item, cal, p, c, f):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO daily_logs (log_date, item, calories, protein, carbs, fat)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """,
+        (date_str, item, cal, p, c, f),
+    )
+    conn.commit()
+    conn.close()
+    upload_db_to_drive()
+
+
+def update_log(log_id, item, cal, p, c, f):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        UPDATE daily_logs SET item=?, calories=?, protein=?, carbs=?, fat=? WHERE id=?
+    """,
+        (item, cal, p, c, f, log_id),
+    )
+    conn.commit()
+    conn.close()
+    upload_db_to_drive()
+
+
+def delete_log(log_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM daily_logs WHERE id=?", (log_id,))
+    conn.commit()
+    conn.close()
+    upload_db_to_drive()
+
+
+def add_workout(
+    date_str,
+    item,
+    cal_burned,
+    w_type="其他",
+    distance=None,
+    duration_min=None,
+    avg_hr=None,
+    shoe=None,
+    body_part=None,
+    workout_notes=None,
+    rpe=None,
+):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO workouts (log_date, item, calories_burned, workout_type, distance, duration_min, avg_hr, shoe, body_part, workout_notes, rpe)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """,
+        (
+            date_str,
+            item,
+            cal_burned,
+            w_type,
+            distance,
+            duration_min,
+            avg_hr,
+            shoe,
+            body_part,
+            workout_notes,
+            rpe,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    upload_db_to_drive()
+
+
+def update_workout(
+    w_id,
+    item,
+    cal_burned,
+    w_type,
+    distance=None,
+    duration_min=None,
+    avg_hr=None,
+    shoe=None,
+    body_part=None,
+    workout_notes=None,
+    rpe=None,
+):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        UPDATE workouts SET item=?, calories_burned=?, workout_type=?, distance=?, duration_min=?, avg_hr=?, shoe=?, body_part=?, workout_notes=?, rpe=?
+        WHERE id=?
+    """,
+        (
+            item,
+            cal_burned,
+            w_type,
+            distance,
+            duration_min,
+            avg_hr,
+            shoe,
+            body_part,
+            workout_notes,
+            rpe,
+            w_id,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    upload_db_to_drive()
+
+
+def delete_workout(w_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM workouts WHERE id=?", (w_id,))
+    conn.commit()
+    conn.close()
+    upload_db_to_drive()
+
+
+def add_or_update_weight(date_str, weight, body_fat, note):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO weight_logs (log_date, weight, body_fat, note)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(log_date) DO UPDATE SET weight=excluded.weight, body_fat=excluded.body_fat, note=excluded.note
+    """,
+        (date_str, weight, body_fat, note),
+    )
+    conn.commit()
+    conn.close()
+    upload_db_to_drive()
+
+
+def delete_weight_log(date_str):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM weight_logs WHERE log_date=?", (date_str,))
+    conn.commit()
+    conn.close()
+    upload_db_to_drive()
+    
 # =============================================================================
 # 2. 食物資料庫 & 紀錄操作 CRUD 函式
 # =============================================================================
