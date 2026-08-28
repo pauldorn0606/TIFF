@@ -4,26 +4,6 @@ from datetime import date, timedelta
 import sqlite3
 import altair as alt
 import pandas as pd
-import streamlit as st
-from st_files_connection import FilesConnection
-import pandas as pd
-
-# 1. 建立與 Google Sheets 的連線
-conn = st.connection("gsheets", type=FilesConnection)
-
-# 2. 讀取前一天的紀錄（填入你的 Google 試算表網址）
-url = "https://google.com"
-try:
-    df_history = conn.read(spreadsheet=url, ttl="0")
-    st.write("昨天的紀錄：", df_history)
-except Exception:
-    st.write("目前還沒有任何紀錄！")
-
-# 3. 儲存新紀錄範例
-if st.button("儲存今日紀錄"):
-    new_data = pd.DataFrame([{"日期": "2026-08-28", "項目": "測試紀錄"}])
-    # 這裡可以寫入將 new_data 附加到試算表的程式碼
-    st.success("紀錄已安全存入 Google 試算表！")
 
 # 加上這行，把目前程式儲存檔案的「真實路徑」印在網頁畫面上
 st.warning(f"目前程式認定的資料夾路徑是：{os.getcwd()}")
